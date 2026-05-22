@@ -97,10 +97,8 @@ export function KanbanBoard({ tickets: initialTickets, statuses }: Props) {
 
     // Server action
     startTransition(async () => {
-      try {
-        await changeTicketStatus(ticketId, newStatusId);
-        toast.success(`Stav změněn na "${newStatus.name}"`);
-      } catch (error) {
+      const result = await changeTicketStatus(ticketId, newStatusId);
+      if (result?.error) {
         // Rollback
         setTickets((prev) =>
           prev.map((t) =>
@@ -109,7 +107,9 @@ export function KanbanBoard({ tickets: initialTickets, statuses }: Props) {
               : t,
           ),
         );
-        toast.error('Nepodařilo se změnit stav');
+        toast.error(result.error);
+      } else {
+        toast.success(`Stav změněn na "${newStatus.name}"`);
       }
     });
   }

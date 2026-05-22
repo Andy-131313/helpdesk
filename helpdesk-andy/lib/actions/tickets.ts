@@ -151,31 +151,36 @@ export async function addComment(
   return {};
 }
 
-export async function changeTicketStatus(ticketId: string, statusId: string) {
+export async function changeTicketStatus(ticketId: string, statusId: string): Promise<{ error?: string }> {
   const session = await auth();
   if (!session?.user) redirect("/login");
   if (!isStaff(session.user.role)) {
-    throw new Error("Nemáte oprávnění");
+    return { error: "Nemáte oprávnění" };
   }
 
   const ticket = await prisma.ticket.findUnique({
     where: { id: ticketId },
     include: { status: true },
   });
-  if (!ticket) throw new Error("Ticket nenalezen");
+  if (!ticket) return { error: "Ticket nenalezen" };
 
   const newStatus = await prisma.ticketStatus.findUnique({
     where: { id: statusId },
   });
-  if (!newStatus) throw new Error("Stav nenalezen");
+  if (!newStatus) return { error: "Stav nenalezen" };
 
-  await prisma.ticket.update({
-    where: { id: ticketId },
-    data: {
-      statusId,
-      closedAt: newStatus.isClosedState ? new Date() : null,
-    },
-  });
+  try {
+    await prisma.ticket.update({
+      where: { id: ticketId },
+      data: {
+        statusId,
+        closedAt: newStatus.isClosedState ? new Date() : null,
+      },
+    });
+  } catch (err) {
+    console.error("[changeTicketStatus] DB update failed:", err);
+    return { error: "Nepodařilo se aktualizovat stav v databázi" };
+  }
 
   // Notify customer about status change
   try {
@@ -194,19 +199,25 @@ export async function changeTicketStatus(ticketId: string, statusId: string) {
   revalidatePath(`/tickets/${ticketId}`);
   revalidatePath(`/staff/tickets/${ticketId}`);
   revalidatePath("/staff/tickets");
+  return {};
 }
 
-export async function assignTicket(ticketId: string, assignedToId: string | null) {
+export async function assignTicket(ticketId: string, assignedToId: string | null): Promise<{ error?: string }> {
   const session = await auth();
   if (!session?.user) redirect("/login");
   if (!isStaff(session.user.role)) {
-    throw new Error("Nemáte oprávnění");
+    return { error: "Nemáte oprávnění" };
   }
 
-  await prisma.ticket.update({
-    where: { id: ticketId },
-    data: { assignedToId },
-  });
+  try {
+    await prisma.ticket.update({
+      where: { id: ticketId },
+      data: { assignedToId },
+    });
+  } catch (err) {
+    console.error("[assignTicket] DB update failed:", err);
+    return { error: "Nepodařilo se přiřadit ticket" };
+  }
 
   if (assignedToId && assignedToId !== session.user.id) {
     const ticket = await prisma.ticket.findUnique({

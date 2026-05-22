@@ -40,11 +40,11 @@ export function TicketControls({
     if (newStatusId === currentStatusId) return;
 
     startTransition(async () => {
-      try {
-        await changeTicketStatus(ticketId, newStatusId);
+      const result = await changeTicketStatus(ticketId, newStatusId);
+      if (result?.error) {
+        toast.error(result.error);
+      } else {
         toast.success('Stav byl změněn');
-      } catch {
-        toast.error('Nepodařilo se změnit stav');
       }
     });
   }
@@ -54,11 +54,11 @@ export function TicketControls({
     if (newAssignedToId === currentAssignedToId) return;
 
     startTransition(async () => {
-      try {
-        await assignTicket(ticketId, newAssignedToId);
+      const result = await assignTicket(ticketId, newAssignedToId);
+      if (result?.error) {
+        toast.error(result.error);
+      } else {
         toast.success('Ticket byl přiřazen');
-      } catch {
-        toast.error('Nepodařilo se přiřadit ticket');
       }
     });
   }
@@ -118,11 +118,11 @@ export function TicketControls({
               disabled={isPending || s.id === currentStatusId}
               onClick={() => {
                 startTransition(async () => {
-                  try {
-                    await changeTicketStatus(ticketId, s.id);
+                  const result = await changeTicketStatus(ticketId, s.id);
+                  if (result?.error) {
+                    toast.error(result.error);
+                  } else {
                     toast.success(`Stav změněn na "${s.name}"`);
-                  } catch {
-                    toast.error('Chyba');
                   }
                 });
               }}
