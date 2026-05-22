@@ -242,4 +242,5 @@ export async function assignTicket(ticketId: string, assignedToId: string | null
   revalidatePath(`/tickets/${ticketId}`);
   revalidatePath(`/staff/tickets/${ticketId}`);
   revalidatePath("/staff/tickets");
+  return {};
 }
