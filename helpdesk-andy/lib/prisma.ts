@@ -1,22 +1,17 @@
 import { PrismaClient } from "@/app/generated/prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
+import { Pool } from "pg";
 
 const globalForPrisma = globalThis as unknown as {
   prisma: PrismaClient | undefined;
 };
 
-function getConnectionUrl() {
-  const url = process.env.DATABASE_URL!;
-  // Add SSL for production (Vercel -> Supabase)
-  if (process.env.NODE_ENV === "production" && !url.includes("sslmode")) {
-    const separator = url.includes("?") ? "&" : "?";
-    return `${url}${separator}sslmode=require`;
-  }
-  return url;
-}
-
 function createPrismaClient() {
-  const adapter = new PrismaPg(getConnectionUrl());
+  const pool = new Pool({
+    connectionString: process.env.DATABASE_URL!,
+    ssl: { rejectUnauthorized: false },
+  });
+  const adapter = new PrismaPg(pool);
   return new PrismaClient({ adapter });
 }
 
