@@ -52,16 +52,20 @@ export async function createTicket(
     },
   });
 
-  // Notify agents
-  const agentIds = await getAgentAndAdminIds();
-  await notify({
-    type: "TICKET_CREATED",
-    ticketId: ticket.id,
-    message: `Nový ticket ${formatTicketNumber(ticket.number)}: ${ticket.title}`,
-    recipientIds: agentIds.filter((id) => id !== session.user.id),
-    emailSubject: `[${formatTicketNumber(ticket.number)}] Nový požadavek: ${ticket.title}`,
-    emailBody: `Byl vytvořen nový ticket ${formatTicketNumber(ticket.number)}.\n\nTitulek: ${ticket.title}\nPriorita: ${ticket.priority}\nVytvořil: ${session.user.name || session.user.email}\n\nPopis:\n${ticket.description}`,
-  });
+  // Notify agents (non-blocking — don't let email failures crash ticket creation)
+  try {
+    const agentIds = await getAgentAndAdminIds();
+    await notify({
+      type: "TICKET_CREATED",
+      ticketId: ticket.id,
+      message: `Nový ticket ${formatTicketNumber(ticket.number)}: ${ticket.title}`,
+      recipientIds: agentIds.filter((id) => id !== session.user.id),
+      emailSubject: `[${formatTicketNumber(ticket.number)}] Nový požadavek: ${ticket.title}`,
+      emailBody: `Byl vytvořen nový ticket ${formatTicketNumber(ticket.number)}.\n\nTitulek: ${ticket.title}\nPriorita: ${ticket.priority}\nVytvořil: ${session.user.name || session.user.email}\n\nPopis:\n${ticket.description}`,
+    });
+  } catch (err) {
+    console.error("[createTicket] Notification failed:", err);
+  }
 
   redirect(`/tickets/${ticket.id}`);
 }
@@ -111,31 +115,35 @@ export async function addComment(
   });
 
   // Notify based on who commented
-  if (!parsed.data.isInternal) {
-    if (isStaff(session.user.role)) {
-      // Staff replied → notify customer
-      await notify({
-        type: "COMMENT_ADDED",
-        ticketId: ticket.id,
-        message: `Nová odpověď na ticket ${formatTicketNumber(ticket.number)}`,
-        recipientIds: [ticket.createdById],
-        emailSubject: `[${formatTicketNumber(ticket.number)}] Nová odpověď na váš požadavek`,
-        emailBody: `Obdrželi jste novou odpověď na ticket "${ticket.title}".\n\n${parsed.data.body}`,
-      });
-    } else {
-      // Customer replied → notify assigned agent or all agents
-      const recipientIds = ticket.assignedToId
-        ? [ticket.assignedToId]
-        : await getAgentAndAdminIds();
-      await notify({
-        type: "COMMENT_ADDED",
-        ticketId: ticket.id,
-        message: `${session.user.name || session.user.email} odpověděl na ${formatTicketNumber(ticket.number)}`,
-        recipientIds: recipientIds.filter((id) => id !== session.user.id),
-        emailSubject: `[${formatTicketNumber(ticket.number)}] Nový komentář od zákazníka`,
-        emailBody: `Zákazník přidal komentář k ticketu "${ticket.title}".\n\n${parsed.data.body}`,
-      });
+  try {
+    if (!parsed.data.isInternal) {
+      if (isStaff(session.user.role)) {
+        // Staff replied → notify customer
+        await notify({
+          type: "COMMENT_ADDED",
+          ticketId: ticket.id,
+          message: `Nová odpověď na ticket ${formatTicketNumber(ticket.number)}`,
+          recipientIds: [ticket.createdById],
+          emailSubject: `[${formatTicketNumber(ticket.number)}] Nová odpověď na váš požadavek`,
+          emailBody: `Obdrželi jste novou odpověď na ticket "${ticket.title}".\n\n${parsed.data.body}`,
+        });
+      } else {
+        // Customer replied → notify assigned agent or all agents
+        const recipientIds = ticket.assignedToId
+          ? [ticket.assignedToId]
+          : await getAgentAndAdminIds();
+        await notify({
+          type: "COMMENT_ADDED",
+          ticketId: ticket.id,
+          message: `${session.user.name || session.user.email} odpověděl na ${formatTicketNumber(ticket.number)}`,
+          recipientIds: recipientIds.filter((id) => id !== session.user.id),
+          emailSubject: `[${formatTicketNumber(ticket.number)}] Nový komentář od zákazníka`,
+          emailBody: `Zákazník přidal komentář k ticketu "${ticket.title}".\n\n${parsed.data.body}`,
+        });
+      }
     }
+  } catch (err) {
+    console.error("[addComment] Notification failed:", err);
   }
 
   revalidatePath(`/tickets/${ticket.id}`);
@@ -170,14 +178,18 @@ export async function changeTicketStatus(ticketId: string, statusId: string) {
   });
 
   // Notify customer about status change
-  await notify({
-    type: "STATUS_CHANGED",
-    ticketId: ticket.id,
-    message: `Stav ticketu ${formatTicketNumber(ticket.number)} změněn na "${newStatus.name}"`,
-    recipientIds: [ticket.createdById],
-    emailSubject: `[${formatTicketNumber(ticket.number)}] Stav změněn: ${newStatus.name}`,
-    emailBody: `Stav vašeho ticketu "${ticket.title}" byl změněn na "${newStatus.name}".`,
-  });
+  try {
+    await notify({
+      type: "STATUS_CHANGED",
+      ticketId: ticket.id,
+      message: `Stav ticketu ${formatTicketNumber(ticket.number)} změněn na "${newStatus.name}"`,
+      recipientIds: [ticket.createdById],
+      emailSubject: `[${formatTicketNumber(ticket.number)}] Stav změněn: ${newStatus.name}`,
+      emailBody: `Stav vašeho ticketu "${ticket.title}" byl změněn na "${newStatus.name}".`,
+    });
+  } catch (err) {
+    console.error("[changeTicketStatus] Notification failed:", err);
+  }
 
   revalidatePath(`/tickets/${ticketId}`);
   revalidatePath(`/staff/tickets/${ticketId}`);
@@ -201,14 +213,18 @@ export async function assignTicket(ticketId: string, assignedToId: string | null
       where: { id: ticketId },
     });
     if (ticket) {
-      await notify({
-        type: "ASSIGNED",
-        ticketId,
-        message: `Ticket ${formatTicketNumber(ticket.number)} vám byl přiřazen`,
-        recipientIds: [assignedToId],
-        emailSubject: `[${formatTicketNumber(ticket.number)}] Přiřazený ticket`,
-        emailBody: `Ticket "${ticket.title}" vám byl přiřazen.`,
-      });
+      try {
+        await notify({
+          type: "ASSIGNED",
+          ticketId,
+          message: `Ticket ${formatTicketNumber(ticket.number)} vám byl přiřazen`,
+          recipientIds: [assignedToId],
+          emailSubject: `[${formatTicketNumber(ticket.number)}] Přiřazený ticket`,
+          emailBody: `Ticket "${ticket.title}" vám byl přiřazen.`,
+        });
+      } catch (err) {
+        console.error("[assignTicket] Notification failed:", err);
+      }
     }
   }
 
