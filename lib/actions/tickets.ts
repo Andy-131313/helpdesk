@@ -13,6 +13,7 @@ import {
 import { notify, getAgentAndAdminIds } from "@/lib/notifications";
 import { isStaff } from "@/lib/permissions";
 import { formatTicketNumber } from "@/lib/utils";
+import { getSupabaseAdmin } from "@/lib/supabase";
 
 export async function createTicket(
   _prevState: { error?: string } | undefined,
@@ -51,6 +52,38 @@ export async function createTicket(
       createdById: session.user.id,
     },
   });
+
+  // Handle file uploads (non-blocking)
+  try {
+    const files = formData.getAll("files") as File[];
+    const validFiles = files.filter((f) => f instanceof File && f.size > 0 && f.size <= 10 * 1024 * 1024);
+    if (validFiles.length > 0) {
+      const supabase = getSupabaseAdmin();
+      for (const file of validFiles) {
+        const timestamp = Date.now();
+        const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+        const storagePath = `${session.user.id}/${timestamp}-${safeName}`;
+        const buffer = Buffer.from(await file.arrayBuffer());
+        const { error: uploadError } = await supabase.storage
+          .from("attachments")
+          .upload(storagePath, buffer, { contentType: file.type, upsert: false });
+        if (!uploadError) {
+          await prisma.attachment.create({
+            data: {
+              fileName: file.name,
+              mimeType: file.type,
+              size: file.size,
+              storagePath,
+              ticketId: ticket.id,
+              uploadedById: session.user.id,
+            },
+          });
+        }
+      }
+    }
+  } catch (err) {
+    console.error("[createTicket] File upload failed:", err);
+  }
 
   // Notify agents (non-blocking — don't let email failures crash ticket creation)
   try {
