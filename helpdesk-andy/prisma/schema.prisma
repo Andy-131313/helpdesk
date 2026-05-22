@@ -1,0 +1,180 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../app/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─── Auth.js tables ───────────────────────────────────────────────────────────
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// ─── Application models ───────────────────────────────────────────────────────
+
+enum Role {
+  CUSTOMER
+  AGENT
+  ADMIN
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String    @unique
+  emailVerified DateTime?
+  passwordHash  String?
+  image         String?
+  role          Role      @default(CUSTOMER)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  accounts      Account[]
+  sessions      Session[]
+  tickets       Ticket[]       @relation("CreatedTickets")
+  assignedTickets Ticket[]     @relation("AssignedTickets")
+  comments      Comment[]
+  attachments   Attachment[]
+  notifications Notification[]
+}
+
+model TicketStatus {
+  id            String   @id @default(cuid())
+  name          String   @unique
+  slug          String   @unique
+  color         String   @default("#6b7280") // gray-500
+  order         Int      @default(0)
+  isSystem      Boolean  @default(false)
+  isClosedState Boolean  @default(false)
+  createdAt     DateTime @default(now())
+
+  tickets Ticket[]
+}
+
+model Category {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  slug      String   @unique
+  color     String   @default("#6b7280")
+  createdAt DateTime @default(now())
+
+  tickets Ticket[]
+}
+
+model Ticket {
+  id           String       @id @default(cuid())
+  number       Int          @unique @default(autoincrement())
+  title        String
+  description  String       @db.Text
+  priority     Priority     @default(MEDIUM)
+  statusId     String
+  categoryId   String?
+  createdById  String
+  assignedToId String?
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+  closedAt     DateTime?
+
+  status     TicketStatus @relation(fields: [statusId], references: [id])
+  category   Category?    @relation(fields: [categoryId], references: [id])
+  createdBy  User         @relation("CreatedTickets", fields: [createdById], references: [id])
+  assignedTo User?        @relation("AssignedTickets", fields: [assignedToId], references: [id])
+  comments   Comment[]
+  attachments Attachment[]
+
+  @@index([statusId])
+  @@index([createdById])
+  @@index([assignedToId])
+  @@index([priority])
+}
+
+model Comment {
+  id         String   @id @default(cuid())
+  body       String   @db.Text
+  isInternal Boolean  @default(false)
+  ticketId   String
+  authorId   String
+  createdAt  DateTime @default(now())
+
+  ticket      Ticket       @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  author      User         @relation(fields: [authorId], references: [id])
+  attachments Attachment[]
+}
+
+model Attachment {
+  id           String   @id @default(cuid())
+  fileName     String
+  mimeType     String
+  size         Int
+  storagePath  String
+  ticketId     String?
+  commentId    String?
+  uploadedById String
+  createdAt    DateTime @default(now())
+
+  ticket     Ticket?  @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  comment    Comment? @relation(fields: [commentId], references: [id], onDelete: Cascade)
+  uploadedBy User     @relation(fields: [uploadedById], references: [id])
+}
+
+enum NotificationType {
+  TICKET_CREATED
+  COMMENT_ADDED
+  STATUS_CHANGED
+  ASSIGNED
+}
+
+model Notification {
+  id        String           @id @default(cuid())
+  userId    String
+  type      NotificationType
+  ticketId  String
+  message   String
+  readAt    DateTime?
+  createdAt DateTime         @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt])
+}

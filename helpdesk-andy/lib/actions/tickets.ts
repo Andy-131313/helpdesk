@@ -1,0 +1,218 @@
+"use server";
+
+import { prisma } from "@/lib/prisma";
+import { auth } from "@/lib/auth";
+import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
+import {
+  createTicketSchema,
+  addCommentSchema,
+  changeStatusSchema,
+  assignTicketSchema,
+} from "@/lib/validations";
+import { notify, getAgentAndAdminIds } from "@/lib/notifications";
+import { isStaff } from "@/lib/permissions";
+import { formatTicketNumber } from "@/lib/utils";
+
+export async function createTicket(
+  _prevState: { error?: string } | undefined,
+  formData: FormData
+) {
+  const session = await auth();
+  if (!session?.user) redirect("/login");
+
+  const raw = {
+    title: formData.get("title") as string,
+    description: formData.get("description") as string,
+    priority: (formData.get("priority") as string) || "MEDIUM",
+    categoryId: (formData.get("categoryId") as string) || undefined,
+  };
+
+  const parsed = createTicketSchema.safeParse(raw);
+  if (!parsed.success) {
+    return { error: parsed.error.issues[0].message };
+  }
+
+  // Get default "Open" status
+  const openStatus = await prisma.ticketStatus.findUnique({
+    where: { slug: "open" },
+  });
+  if (!openStatus) {
+    return { error: "Systémová chyba: stav 'Open' nenalezen" };
+  }
+
+  const ticket = await prisma.ticket.create({
+    data: {
+      title: parsed.data.title,
+      description: parsed.data.description,
+      priority: parsed.data.priority as "LOW" | "MEDIUM" | "HIGH" | "URGENT",
+      statusId: openStatus.id,
+      categoryId: parsed.data.categoryId || null,
+      createdById: session.user.id,
+    },
+  });
+
+  // Notify agents
+  const agentIds = await getAgentAndAdminIds();
+  await notify({
+    type: "TICKET_CREATED",
+    ticketId: ticket.id,
+    message: `Nový ticket ${formatTicketNumber(ticket.number)}: ${ticket.title}`,
+    recipientIds: agentIds.filter((id) => id !== session.user.id),
+    emailSubject: `[${formatTicketNumber(ticket.number)}] Nový požadavek: ${ticket.title}`,
+    emailBody: `Byl vytvořen nový ticket ${formatTicketNumber(ticket.number)}.\n\nTitulek: ${ticket.title}\nPriorita: ${ticket.priority}\nVytvořil: ${session.user.name || session.user.email}\n\nPopis:\n${ticket.description}`,
+  });
+
+  redirect(`/tickets/${ticket.id}`);
+}
+
+export async function addComment(
+  _prevState: { error?: string } | undefined,
+  formData: FormData
+) {
+  const session = await auth();
+  if (!session?.user) redirect("/login");
+
+  const raw = {
+    ticketId: formData.get("ticketId") as string,
+    body: formData.get("body") as string,
+    isInternal: formData.get("isInternal") === "true",
+  };
+
+  const parsed = addCommentSchema.safeParse(raw);
+  if (!parsed.success) {
+    return { error: parsed.error.issues[0].message };
+  }
+
+  // Verify access
+  const ticket = await prisma.ticket.findUnique({
+    where: { id: parsed.data.ticketId },
+    include: { createdBy: true, assignedTo: true },
+  });
+  if (!ticket) return { error: "Ticket nenalezen" };
+
+  // Customers can only comment on their own tickets
+  if (!isStaff(session.user.role) && ticket.createdById !== session.user.id) {
+    return { error: "Nemáte oprávnění" };
+  }
+
+  // Only staff can post internal comments
+  if (parsed.data.isInternal && !isStaff(session.user.role)) {
+    return { error: "Nemáte oprávnění pro interní poznámku" };
+  }
+
+  await prisma.comment.create({
+    data: {
+      ticketId: parsed.data.ticketId,
+      authorId: session.user.id,
+      body: parsed.data.body,
+      isInternal: parsed.data.isInternal,
+    },
+  });
+
+  // Notify based on who commented
+  if (!parsed.data.isInternal) {
+    if (isStaff(session.user.role)) {
+      // Staff replied → notify customer
+      await notify({
+        type: "COMMENT_ADDED",
+        ticketId: ticket.id,
+        message: `Nová odpověď na ticket ${formatTicketNumber(ticket.number)}`,
+        recipientIds: [ticket.createdById],
+        emailSubject: `[${formatTicketNumber(ticket.number)}] Nová odpověď na váš požadavek`,
+        emailBody: `Obdrželi jste novou odpověď na ticket "${ticket.title}".\n\n${parsed.data.body}`,
+      });
+    } else {
+      // Customer replied → notify assigned agent or all agents
+      const recipientIds = ticket.assignedToId
+        ? [ticket.assignedToId]
+        : await getAgentAndAdminIds();
+      await notify({
+        type: "COMMENT_ADDED",
+        ticketId: ticket.id,
+        message: `${session.user.name || session.user.email} odpověděl na ${formatTicketNumber(ticket.number)}`,
+        recipientIds: recipientIds.filter((id) => id !== session.user.id),
+        emailSubject: `[${formatTicketNumber(ticket.number)}] Nový komentář od zákazníka`,
+        emailBody: `Zákazník přidal komentář k ticketu "${ticket.title}".\n\n${parsed.data.body}`,
+      });
+    }
+  }
+
+  revalidatePath(`/tickets/${ticket.id}`);
+  revalidatePath(`/staff/tickets/${ticket.id}`);
+  return {};
+}
+
+export async function changeTicketStatus(ticketId: string, statusId: string) {
+  const session = await auth();
+  if (!session?.user) redirect("/login");
+  if (!isStaff(session.user.role)) {
+    throw new Error("Nemáte oprávnění");
+  }
+
+  const ticket = await prisma.ticket.findUnique({
+    where: { id: ticketId },
+    include: { status: true },
+  });
+  if (!ticket) throw new Error("Ticket nenalezen");
+
+  const newStatus = await prisma.ticketStatus.findUnique({
+    where: { id: statusId },
+  });
+  if (!newStatus) throw new Error("Stav nenalezen");
+
+  await prisma.ticket.update({
+    where: { id: ticketId },
+    data: {
+      statusId,
+      closedAt: newStatus.isClosedState ? new Date() : null,
+    },
+  });
+
+  // Notify customer about status change
+  await notify({
+    type: "STATUS_CHANGED",
+    ticketId: ticket.id,
+    message: `Stav ticketu ${formatTicketNumber(ticket.number)} změněn na "${newStatus.name}"`,
+    recipientIds: [ticket.createdById],
+    emailSubject: `[${formatTicketNumber(ticket.number)}] Stav změněn: ${newStatus.name}`,
+    emailBody: `Stav vašeho ticketu "${ticket.title}" byl změněn na "${newStatus.name}".`,
+  });
+
+  revalidatePath(`/tickets/${ticketId}`);
+  revalidatePath(`/staff/tickets/${ticketId}`);
+  revalidatePath("/staff/tickets");
+}
+
+export async function assignTicket(ticketId: string, assignedToId: string | null) {
+  const session = await auth();
+  if (!session?.user) redirect("/login");
+  if (!isStaff(session.user.role)) {
+    throw new Error("Nemáte oprávnění");
+  }
+
+  await prisma.ticket.update({
+    where: { id: ticketId },
+    data: { assignedToId },
+  });
+
+  if (assignedToId && assignedToId !== session.user.id) {
+    const ticket = await prisma.ticket.findUnique({
+      where: { id: ticketId },
+    });
+    if (ticket) {
+      await notify({
+        type: "ASSIGNED",
+        ticketId,
+        message: `Ticket ${formatTicketNumber(ticket.number)} vám byl přiřazen`,
+        recipientIds: [assignedToId],
+        emailSubject: `[${formatTicketNumber(ticket.number)}] Přiřazený ticket`,
+        emailBody: `Ticket "${ticket.title}" vám byl přiřazen.`,
+      });
+    }
+  }
+
+  revalidatePath(`/tickets/${ticketId}`);
+  revalidatePath(`/staff/tickets/${ticketId}`);
+  revalidatePath("/staff/tickets");
+}
