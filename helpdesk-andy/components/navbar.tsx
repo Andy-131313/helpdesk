@@ -45,6 +45,12 @@ export async function Navbar() {
                     Tickety
                   </Link>
                   <Link
+                    href="/tickets/new"
+                    className="text-blue-600 hover:text-blue-500 font-medium"
+                  >
+                    + Nový požadavek
+                  </Link>
+                  <Link
                     href="/staff/dashboard"
                     className="flex items-center gap-1.5 text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-50"
                   >
